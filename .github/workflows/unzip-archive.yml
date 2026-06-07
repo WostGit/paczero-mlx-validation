@@ -6,15 +6,18 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   unzip:
-    name: Locate and unpack archive
+    name: Locate, unpack, and commit archive
     runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]'
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Locate and validate archive
         run: |
@@ -35,16 +38,25 @@ jobs:
           fi
           unzip -t archive.zip
 
-      - name: Unpack archive
+      - name: Unpack archive into repository root
         run: |
           set -euo pipefail
           rm -rf unpacked
           mkdir -p unpacked
           unzip -q archive.zip -d unpacked
           find unpacked -maxdepth 3 -type f | sort | sed -n '1,120p'
+          rsync -a unpacked/ ./
+          rm -rf unpacked archive.zip
 
-      - name: Upload unpacked archive artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: unpacked-archive
-          path: unpacked/
+      - name: Commit unpacked contents
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No unpacked changes to commit."
+            exit 0
+          fi
+          git commit -m "Unpack packaged archive"
+          git push
