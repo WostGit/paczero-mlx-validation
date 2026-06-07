@@ -1,31 +1,27 @@
 # PAC-Zero MLX Validation
 
-This repository contains a compact PAC-Zero / ZPL validation package for Apple MLX using `mlx-community/SmolLM-135M-4bit`.
+This package contains a compact PAC-Zero / ZPL validation artifact for Apple MLX using `mlx-community/SmolLM-135M-4bit`.
 
 It is intended as a reproducible software artifact. It preserves the validation scripts, selected result JSON files, logs, and aggregate report for a smoke-scale MLX adaptation. It does **not** claim to reproduce the full paper-scale OPT utility results.
 
 ## Quick start
 
-For the fastest inspection path:
+From the unpacked package directory:
 
 ```bash
-git clone https://github.com/WostGit/paczero-mlx-validation.git
-cd paczero-mlx-validation
 bash run.sh quick
 ```
 
-This compiles the Python scripts, runs the ZPL negative-control check, and rebuilds the aggregate report from the included result JSON files.
+This compiles the Python scripts, runs the ZPL negative-control check, and rebuilds the aggregate report from the included result JSON files. On a standard macOS Apple Silicon system, this quick check can use the built-in `python3` and does not require Homebrew, Python 3.11, a virtual environment, or MLX package installation.
 
 For a full local MLX run on Apple Silicon:
 
 ```bash
-git clone https://github.com/WostGit/paczero-mlx-validation.git
-cd paczero-mlx-validation
-python3.11 -m venv .venv
-source .venv/bin/activate
 bash run.sh install
 bash run.sh local-all
 ```
+
+The installer first tries the available system `python3` with user-site packages. If that path cannot install/import the MLX runtime, it falls back to a managed Python 3.11+ path.
 
 Full local validation downloads model and dataset dependencies and is intended for macOS on Apple Silicon.
 
@@ -97,21 +93,24 @@ benchmark-results/paczero-smollm-utility-control/smollm-135m-4bit-squad/nonpriva
 
 ## Requirements
 
+For lightweight inspection of preserved outputs:
+
+- macOS or Linux with Python 3.9+.
+- No MLX installation is needed for `bash run.sh quick`.
+
 For the full MLX run:
 
 - macOS on Apple Silicon, or a GitHub-hosted macOS runner with MLX support.
-- Python 3.11.
-- Git.
+- Python 3.9+ if compatible MLX wheels are available, otherwise Python 3.11+.
 - Network access to download model and dataset dependencies.
 
-Python packages used by the GitHub Actions workflow:
+Python packages used for full local MLX validation:
 
 ```bash
-python -m pip install --upgrade pip
-python -m pip install --upgrade mlx mlx-lm huggingface_hub hf_transfer safetensors numpy datasets
+python3 -m pip install --user --upgrade mlx mlx-lm huggingface_hub hf_transfer safetensors numpy datasets
 ```
 
-For lightweight inspection of preserved outputs, only Python 3.11 is needed.
+The `run.sh install` command performs this setup automatically where possible.
 
 ## Run on GitHub Actions
 
@@ -123,7 +122,7 @@ The main workflow is:
 
 It can be run from the GitHub web UI:
 
-1. Push this repository to GitHub with Actions enabled.
+1. Upload or push this package to GitHub with Actions enabled.
 2. Open the repository's **Actions** tab.
 3. Select **PACZero SmolLM validation workflow**.
 4. Choose **Run workflow**.
@@ -166,17 +165,9 @@ The workflow also commits generated result files back to the repository. Commit 
 
 If the workflow itself is added, removed, or modified, GitHub may require a token or account with workflow-write permission. Ordinary result-file commits should only need repository contents write permission.
 
-If you are reconstructing this repository from a Zenodo archive, restore `.github/workflows/paczero-smollm-validation.yml` manually through GitHub or with a token that has workflow permission.
+If you are reconstructing this package from a Zenodo archive, restore `.github/workflows/paczero-smollm-validation.yml` manually through GitHub or with a token that has workflow permission.
 
 ## Run locally on Apple Silicon
-
-Create a virtual environment:
-
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-bash run.sh install
-```
 
 Sanity-check the scripts and rebuild preserved outputs:
 
@@ -184,9 +175,17 @@ Sanity-check the scripts and rebuild preserved outputs:
 bash run.sh quick
 ```
 
+Install/check the MLX runtime dependencies:
+
+```bash
+bash run.sh install
+```
+
+The installer first tries the built-in or currently available `python3` with user-site packages. It does not require Homebrew if the current Python can install/import MLX successfully.
+
 ### Rebuild the aggregate report from included results
 
-This is the fastest local reproducibility check because it uses the preserved JSON files already included in the repository:
+This is the fastest local reproducibility check because it uses the preserved JSON files already included in the package:
 
 ```bash
 bash run.sh aggregate
