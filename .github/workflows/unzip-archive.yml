@@ -10,24 +10,37 @@ permissions:
 
 jobs:
   unzip:
-    name: Reconstruct and unpack archive
+    name: Locate and unpack archive
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Locate archive
+      - name: Locate and validate archive
         run: |
           set -euo pipefail
-          test -f archive/mlx-finetune-main-subtle.zip
-          unzip -t archive/mlx-finetune-main-subtle.zip
+          echo "Repository files:"
+          find . -maxdepth 4 -type f | sort
+          if [ -f archive/mlx-finetune-main-subtle.zip ]; then
+            cp archive/mlx-finetune-main-subtle.zip archive.zip
+          elif [ -f mlx-finetune-main-subtle.zip ]; then
+            cp mlx-finetune-main-subtle.zip archive.zip
+          elif [ -f archive/mlx-finetune-main-cleaned.zip ]; then
+            cp archive/mlx-finetune-main-cleaned.zip archive.zip
+          elif [ -f mlx-finetune-main-cleaned.zip ]; then
+            cp mlx-finetune-main-cleaned.zip archive.zip
+          else
+            echo "No expected zip found. Put mlx-finetune-main-subtle.zip at repo root or archive/." >&2
+            exit 1
+          fi
+          unzip -t archive.zip
 
       - name: Unpack archive
         run: |
           set -euo pipefail
           rm -rf unpacked
           mkdir -p unpacked
-          unzip -q archive/mlx-finetune-main-subtle.zip -d unpacked
+          unzip -q archive.zip -d unpacked
           find unpacked -maxdepth 3 -type f | sort | sed -n '1,120p'
 
       - name: Upload unpacked archive artifact
