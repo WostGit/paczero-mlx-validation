@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # PAC-Zero MLX validation helper.
-# Designed to be very explicit on a clean macOS machine.
+# Fast path: quick/aggregate/negative-control use the built-in macOS python3 when possible.
+# Full MLX runs: install/local-* still bootstrap Python 3.11+ and MLX dependencies.
 
 MODE="${1:-quick}"
 MODEL="${MODEL:-mlx-community/SmolLM-135M-4bit}"
@@ -38,39 +39,30 @@ usage() {
   cat <<'USAGE'
 PAC-Zero MLX validation helper
 
-Clean macOS quick start:
-  git clone https://github.com/WostGit/paczero-mlx-validation.git
-  cd paczero-mlx-validation
+Fast check, no Homebrew/Python install needed on standard macOS:
   bash run.sh quick
 
-Useful modes:
-  bash run.sh quick                 Set up Python if needed, compile scripts, run negative control, rebuild aggregate report.
-  bash run.sh bootstrap             Set up Homebrew/Python/.venv/dependencies only.
-  bash run.sh doctor                Print detailed diagnostics only.
-  bash run.sh aggregate             Rebuild aggregate report from included JSON files.
-  bash run.sh negative-control      Run only the ZPL negative-control check.
-  bash run.sh install               Install Python dependencies into .venv.
-  bash run.sh local-sst2            Run local MLX validation on SST-2.
-  bash run.sh local-squad           Run local MLX validation on SQuAD.
-  bash run.sh local-control-sst2    Run local non-private utility control on SST-2.
-  bash run.sh local-control-squad   Run local non-private utility control on SQuAD.
-  bash run.sh local-all             Run all local MLX tasks and rebuild aggregate report.
+Full local MLX run on Apple Silicon:
+  bash run.sh install
+  bash run.sh local-all
 
-Fresh-machine behavior:
-  - The script looks for Homebrew on PATH, /opt/homebrew/bin/brew, and /usr/local/bin/brew.
-  - If Python 3.11+ is missing, it installs python@3.11 with Homebrew.
-  - If Homebrew is missing, it asks before running the official Homebrew installer.
-  - To allow Homebrew install without a prompt:
-      AUTO_INSTALL_HOMEBREW=1 bash run.sh quick
-  - To forbid Homebrew install:
-      AUTO_INSTALL_HOMEBREW=0 bash run.sh quick
-
-Runtime overrides:
-  STEPS=10 TRAIN_EXAMPLES=4 DEV_EXAMPLES=4 EVAL_EXAMPLES=16 bash run.sh local-sst2
+Modes:
+  quick                 Use available python3, compile scripts, run negative control, rebuild aggregate report.
+  aggregate             Use available python3, rebuild aggregate report from included JSON files.
+  negative-control      Use available python3, run only the ZPL negative-control check.
+  doctor                Print diagnostics only.
+  bootstrap             Set up Python 3.11+, .venv, and dependencies for full MLX runs.
+  install               Same as bootstrap dependency install.
+  local-sst2            Run local MLX validation on SST-2.
+  local-squad           Run local MLX validation on SQuAD.
+  local-control-sst2    Run local non-private utility control on SST-2.
+  local-control-squad   Run local non-private utility control on SQuAD.
+  local-all             Run all local MLX tasks and rebuild aggregate report.
 
 Notes:
-  - Full MLX runs require macOS on Apple Silicon.
-  - The quick mode is lightweight and mostly checks the archived result package.
+  - quick/aggregate/negative-control intentionally accept Python 3.9+ to be fast on clean macOS.
+  - install/local-* use Python 3.11+ and can install it via Homebrew.
+  - To allow Homebrew install without prompt: AUTO_INSTALL_HOMEBREW=1 bash run.sh install
 USAGE
 }
 
@@ -78,12 +70,8 @@ ensure_repo_root() {
   hr
   log "Checking repository layout."
   log "Current directory: $(pwd)"
-  if [ ! -d scripts ]; then
-    fail "run.sh must be executed from the repository root. Expected ./scripts but it was not found."
-  fi
-  if [ ! -f scripts/paczero_smollm_validation_aggregate.py ]; then
-    fail "Missing expected script: scripts/paczero_smollm_validation_aggregate.py"
-  fi
+  [ -d scripts ] || fail "Run from repository root; ./scripts was not found."
+  [ -f scripts/paczero_smollm_validation_aggregate.py ] || fail "Missing scripts/paczero_smollm_validation_aggregate.py"
   log "Repository layout looks OK."
 }
 
@@ -93,15 +81,8 @@ print_system_info() {
   log "Date UTC: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   log "Shell: ${SHELL:-unknown}"
   log "PATH: ${PATH:-empty}"
-  if command -v uname >/dev/null 2>&1; then
-    log "uname: $(uname -a)"
-    log "machine: $(uname -m)"
-  fi
-  if command -v sw_vers >/dev/null 2>&1; then
-    log "macOS: $(sw_vers -productName) $(sw_vers -productVersion) build $(sw_vers -buildVersion)"
-  else
-    warn "sw_vers not found; this may not be macOS."
-  fi
+  command -v uname >/dev/null 2>&1 && log "uname: $(uname -a)"
+  command -v sw_vers >/dev/null 2>&1 && log "macOS: $(sw_vers -productName) $(sw_vers -productVersion) build $(sw_vers -buildVersion)"
   if [ "$(uname -s 2>/dev/null || echo unknown)" = "Darwin" ] && [ "$(uname -m 2>/dev/null || echo unknown)" = "arm64" ]; then
     log "Apple Silicon detected: yes"
   else
@@ -134,238 +115,134 @@ print_tool_locations() {
       warn "$tool: not found"
     fi
   done
-  if [ -n "$BREW_BIN" ]; then
-    log "brew: $BREW_BIN"
-  else
-    warn "brew: not found on PATH, /opt/homebrew/bin, or /usr/local/bin"
-  fi
-  if command -v xcode-select >/dev/null 2>&1; then
-    if xcode-select -p >/dev/null 2>&1; then
-      log "Xcode command line tools path: $(xcode-select -p)"
-    else
-      warn "Xcode command line tools are missing. Install with: xcode-select --install"
-    fi
-  fi
+  [ -n "$BREW_BIN" ] && log "brew: $BREW_BIN" || warn "brew: not found"
+}
+
+find_any_python() {
+  if command -v python3.11 >/dev/null 2>&1; then PYTHON_BIN="$(command -v python3.11)";
+  elif [ -x /opt/homebrew/bin/python3.11 ]; then PYTHON_BIN="/opt/homebrew/bin/python3.11";
+  elif [ -x /usr/local/bin/python3.11 ]; then PYTHON_BIN="/usr/local/bin/python3.11";
+  elif command -v python3 >/dev/null 2>&1; then PYTHON_BIN="$(command -v python3)";
+  elif command -v python >/dev/null 2>&1; then PYTHON_BIN="$(command -v python)";
+  else PYTHON_BIN=""; fi
+}
+
+python_at_least() {
+  min_major="$1"
+  min_minor="$2"
+  [ -n "$PYTHON_BIN" ] || return 1
+  "$PYTHON_BIN" - "$min_major" "$min_minor" <<'PY'
+import sys
+maj = int(sys.argv[1]); minor = int(sys.argv[2])
+raise SystemExit(0 if sys.version_info >= (maj, minor) else 1)
+PY
+}
+
+ensure_light_python() {
+  hr
+  log "Checking lightweight Python for quick/archive checks."
+  find_any_python
+  [ -n "$PYTHON_BIN" ] || fail "No Python found. Install Python 3 or run xcode-select --install."
+  log "Using Python candidate: $PYTHON_BIN"
+  log "Version: $($PYTHON_BIN --version 2>&1)"
+  python_at_least 3 9 || fail "Python 3.9+ is required for quick/archive checks."
+  log "Python is sufficient for quick/archive checks. No Homebrew bootstrap needed."
 }
 
 ask_yes_no() {
-  question="$1"
-  default_answer="$2"
-  if [ ! -t 0 ]; then
-    [ "$default_answer" = "yes" ]
-    return $?
-  fi
+  question="$1"; default_answer="$2"
+  [ -t 0 ] || { [ "$default_answer" = "yes" ]; return $?; }
   printf '%s ' "$question"
   read -r answer
   answer="${answer:-$default_answer}"
-  case "$answer" in
-    y|Y|yes|YES|Yes) return 0 ;;
-    *) return 1 ;;
-  esac
+  case "$answer" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
 }
 
 ensure_homebrew() {
   find_brew
-  if [ -n "$BREW_BIN" ]; then
-    log "Homebrew available: $BREW_BIN"
-    return 0
-  fi
-
-  warn "Homebrew is not installed or not discoverable."
-  if [ "$AUTO_INSTALL_HOMEBREW" = "0" ]; then
-    cat >&2 <<'EOF'
-
-Install Homebrew manually, then rerun:
-
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  eval "$(/opt/homebrew/bin/brew shellenv)"
-  bash run.sh quick
-
-EOF
-    fail "Homebrew is required to install Python 3.11 automatically."
-  fi
-
-  if [ "$AUTO_INSTALL_HOMEBREW" = "1" ] || ask_yes_no "Install Homebrew now using the official installer? [y/N]" "no"; then
-    hr
-    log "Installing Homebrew. This may ask for your macOS password and may take several minutes."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  if [ -n "$BREW_BIN" ]; then log "Homebrew available: $BREW_BIN"; return 0; fi
+  warn "Homebrew is missing. It is only needed for full MLX install/local-* modes."
+  if [ "$AUTO_INSTALL_HOMEBREW" = "0" ]; then fail "Homebrew install disabled."; fi
+  if [ "$AUTO_INSTALL_HOMEBREW" = "1" ] || ask_yes_no "Install Homebrew now? [y/N]" "no"; then
+    run_cmd /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     find_brew
-    [ -n "$BREW_BIN" ] || fail "Homebrew installer finished, but brew is still not discoverable. Open a new terminal and retry."
-    log "Homebrew installed/found: $BREW_BIN"
+    [ -n "$BREW_BIN" ] || fail "Homebrew still not discoverable. Open a new terminal and retry."
   else
-    fail "Homebrew installation declined. Install Homebrew or Python 3.11 manually, then rerun."
+    fail "Homebrew installation declined."
   fi
 }
 
-find_python() {
-  if command -v python3.11 >/dev/null 2>&1; then
-    PYTHON_BIN="$(command -v python3.11)"
-  elif [ -x /opt/homebrew/bin/python3.11 ]; then
-    PYTHON_BIN="/opt/homebrew/bin/python3.11"
-  elif [ -x /usr/local/bin/python3.11 ]; then
-    PYTHON_BIN="/usr/local/bin/python3.11"
-  elif command -v python3 >/dev/null 2>&1; then
-    PYTHON_BIN="$(command -v python3)"
-  elif command -v python >/dev/null 2>&1; then
-    PYTHON_BIN="$(command -v python)"
-  else
-    PYTHON_BIN=""
-  fi
-}
-
-python_version_ok() {
-  [ -n "$PYTHON_BIN" ] || return 1
-  "$PYTHON_BIN" - <<'PY'
-import sys
-raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
-PY
-}
-
-ensure_python() {
+ensure_python311() {
   hr
-  log "Checking for Python 3.11+."
-  find_python
-  if [ -n "$PYTHON_BIN" ]; then
-    log "Candidate Python: $PYTHON_BIN"
-    log "Candidate version: $($PYTHON_BIN --version 2>&1)"
-  else
-    warn "No Python executable found."
-  fi
-
-  if python_version_ok; then
-    log "Python is acceptable: $($PYTHON_BIN --version 2>&1)"
-    return 0
-  fi
-
-  warn "Python 3.11+ is required; current candidate is missing or too old."
-  if [ "$AUTO_BREW_INSTALL_PYTHON" != "1" ]; then
-    fail "AUTO_BREW_INSTALL_PYTHON=0, so Python will not be installed automatically."
-  fi
-
+  log "Checking Python 3.11+ for full MLX runs."
+  find_any_python
+  if [ -n "$PYTHON_BIN" ]; then log "Candidate: $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))"; fi
+  if python_at_least 3 11; then log "Python 3.11+ is available."; return 0; fi
+  [ "$AUTO_BREW_INSTALL_PYTHON" = "1" ] || fail "Python 3.11+ missing and auto install disabled."
   ensure_homebrew
-  hr
-  log "Installing Python 3.11 via Homebrew."
   run_cmd "$BREW_BIN" install python@3.11
   eval "$($BREW_BIN shellenv)"
-  find_python
-  python_version_ok || fail "Python 3.11+ still not available after Homebrew install."
-  log "Using Python: $PYTHON_BIN"
+  find_any_python
+  python_at_least 3 11 || fail "Python 3.11+ still missing after brew install."
 }
 
 ensure_venv() {
-  if [ "$PACZERO_SKIP_VENV" = "1" ]; then
-    hr
-    log "PACZERO_SKIP_VENV=1: using current Python directly: $PYTHON_BIN"
-    return 0
-  fi
+  if [ "$PACZERO_SKIP_VENV" = "1" ]; then log "PACZERO_SKIP_VENV=1; using $PYTHON_BIN directly."; return 0; fi
   hr
-  log "Preparing virtual environment at $VENV_DIR."
-  if [ ! -d "$VENV_DIR" ]; then
-    run_cmd "$PYTHON_BIN" -m venv "$VENV_DIR"
-  else
-    log "Virtual environment already exists: $VENV_DIR"
-  fi
-  [ -x "$VENV_DIR/bin/python" ] || fail "Virtual environment is missing $VENV_DIR/bin/python. Remove $VENV_DIR and retry."
+  log "Preparing virtual environment: $VENV_DIR"
+  [ -d "$VENV_DIR" ] || run_cmd "$PYTHON_BIN" -m venv "$VENV_DIR"
+  [ -x "$VENV_DIR/bin/python" ] || fail "Broken venv: $VENV_DIR/bin/python missing."
   PYTHON_BIN="$VENV_DIR/bin/python"
-  log "Using virtualenv Python: $PYTHON_BIN"
-  log "Virtualenv version: $($PYTHON_BIN --version 2>&1)"
+  log "Using venv Python: $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))"
 }
 
 ensure_pip() {
   hr
-  log "Checking pip for $PYTHON_BIN."
-  if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
-    warn "pip missing; trying ensurepip."
-    run_cmd "$PYTHON_BIN" -m ensurepip --upgrade
-  fi
+  log "Checking pip."
+  "$PYTHON_BIN" -m pip --version >/dev/null 2>&1 || run_cmd "$PYTHON_BIN" -m ensurepip --upgrade
   log "pip: $($PYTHON_BIN -m pip --version)"
 }
 
-prepare_python_env() {
-  ensure_python
+install_deps() {
+  ensure_python311
   ensure_venv
   ensure_pip
-}
-
-install_deps() {
-  prepare_python_env
   hr
-  log "Installing Python dependencies."
+  log "Installing MLX/runtime dependencies."
   run_cmd "$PYTHON_BIN" -m pip install --upgrade pip
   run_cmd "$PYTHON_BIN" -m pip install --upgrade mlx mlx-lm huggingface_hub hf_transfer safetensors numpy datasets
-  hr
-  log "Dependency import check."
-  "$PYTHON_BIN" - <<'PY'
-import importlib.util, sys
-print('python:', sys.version)
-for name in ['mlx', 'mlx_lm', 'huggingface_hub', 'safetensors', 'numpy', 'datasets']:
-    print(f'{name}:', 'ok' if importlib.util.find_spec(name) else 'missing')
-PY
-}
-
-ensure_runtime_for_lightweight_modes() {
-  prepare_python_env
 }
 
 compile_scripts() {
-  ensure_runtime_for_lightweight_modes
-  hr
-  log "Compiling Python scripts."
+  ensure_light_python
   run_cmd "$PYTHON_BIN" -m py_compile scripts/*.py
 }
-
 run_negative_control() {
-  ensure_runtime_for_lightweight_modes
-  hr
-  log "Running ZPL negative-control audit."
+  ensure_light_python
   run_cmd "$PYTHON_BIN" scripts/paczero_zpl_negative_control.py
 }
-
 run_aggregate() {
-  ensure_runtime_for_lightweight_modes
-  hr
-  log "Rebuilding aggregate report from included JSON results."
+  ensure_light_python
   run_cmd "$PYTHON_BIN" scripts/paczero_smollm_validation_aggregate.py
-  hr
-  log "Aggregate directory contents:"
   ls -lh benchmark-results/paczero-smollm-validation-aggregate || true
 }
 
 print_run_config() {
   hr
-  log "Run configuration"
-  log "MODEL=$MODEL"
-  log "SLUG=$SLUG"
-  log "STEPS=$STEPS"
-  log "TRAIN_EXAMPLES=$TRAIN_EXAMPLES"
-  log "DEV_EXAMPLES=$DEV_EXAMPLES"
-  log "EVAL_EXAMPLES=$EVAL_EXAMPLES"
-  log "LAYERS=$LAYERS"
-  log "PROJECTIONS=$PROJECTIONS"
-  log "RANK=$RANK"
-  log "ALPHA=$ALPHA"
-  log "MU=$MU"
-  log "LR=$LR"
-  log "CLIP=$CLIP"
-  log "EVAL_EVERY=$EVAL_EVERY"
-  log "NUM_SUBSETS=$NUM_SUBSETS"
+  log "Run config: MODEL=$MODEL SLUG=$SLUG STEPS=$STEPS TRAIN/DEV/EVAL=$TRAIN_EXAMPLES/$DEV_EXAMPLES/$EVAL_EXAMPLES LAYERS=$LAYERS"
 }
 
 run_validation_task() {
   install_deps
   print_run_config
-  task="$1"
-  seed="$2"
+  task="$1"; seed="$2"
   out_dir="benchmark-results/paczero-smollm-validation/${SLUG}-${task}"
   adapter_dir="benchmark-results/paczero-smollm-validation-adapters/${SLUG}-${task}"
   mkdir -p "$out_dir" "$adapter_dir"
-  hr
-  log "Running PAC-Zero/ZPL SmolLM validation task: $task"
   run_cmd "$PYTHON_BIN" scripts/paczero_mlxlm_faithful_adaptation.py \
-    --model "$MODEL" --slug "$SLUG" --task "$task" \
-    --projections "$PROJECTIONS" --layers "$LAYERS" \
-    --rank "$RANK" --alpha "$ALPHA" --seed "$seed" \
-    --steps "$STEPS" --train-examples "$TRAIN_EXAMPLES" --dev-examples "$DEV_EXAMPLES" --eval-examples "$EVAL_EXAMPLES" \
+    --model "$MODEL" --slug "$SLUG" --task "$task" --projections "$PROJECTIONS" --layers "$LAYERS" \
+    --rank "$RANK" --alpha "$ALPHA" --seed "$seed" --steps "$STEPS" \
+    --train-examples "$TRAIN_EXAMPLES" --dev-examples "$DEV_EXAMPLES" --eval-examples "$EVAL_EXAMPLES" \
     --num-subsets "$NUM_SUBSETS" --mu "$MU" --lr "$LR" --clip "$CLIP" --eval-every "$EVAL_EVERY" \
     --json-out "$out_dir/smollm_validation_results.json" \
     --adapter-out "$adapter_dir/all_layers_qv_lora_rank8_alpha16.npz"
@@ -374,103 +251,34 @@ run_validation_task() {
 run_utility_control_task() {
   install_deps
   print_run_config
-  task="$1"
-  seed="$2"
+  task="$1"; seed="$2"
   out_dir="benchmark-results/paczero-smollm-utility-control/${SLUG}-${task}"
   adapter_dir="benchmark-results/paczero-smollm-utility-control-adapters/${SLUG}-${task}"
   mkdir -p "$out_dir" "$adapter_dir"
-  hr
-  log "Running non-private utility-control task: $task"
   run_cmd "$PYTHON_BIN" scripts/paczero_smollm_nonprivate_utility_control.py \
-    --model "$MODEL" --slug "$SLUG" --task "$task" \
-    --projections "$PROJECTIONS" --layers "$LAYERS" \
-    --rank "$RANK" --alpha "$ALPHA" --seed "$seed" \
-    --steps "$STEPS" --train-examples "$TRAIN_EXAMPLES" --dev-examples "$DEV_EXAMPLES" --eval-examples "$EVAL_EXAMPLES" \
+    --model "$MODEL" --slug "$SLUG" --task "$task" --projections "$PROJECTIONS" --layers "$LAYERS" \
+    --rank "$RANK" --alpha "$ALPHA" --seed "$seed" --steps "$STEPS" \
+    --train-examples "$TRAIN_EXAMPLES" --dev-examples "$DEV_EXAMPLES" --eval-examples "$EVAL_EXAMPLES" \
     --mu "$MU" --lr "$LR" --eval-every "$EVAL_EVERY" \
     --json-out "$out_dir/nonprivate_utility_control_results.json" \
     --adapter-out "$adapter_dir/nonprivate_all_layers_qv_lora_rank8_alpha16.npz"
 }
 
-bootstrap() {
-  ensure_repo_root
-  print_system_info
-  print_tool_locations
-  install_deps
-  hr
-  log "Bootstrap complete. Next: bash run.sh quick"
-}
-
-doctor() {
-  ensure_repo_root
-  print_system_info
-  print_tool_locations
-  find_python
-  if [ -n "$PYTHON_BIN" ]; then
-    log "Python candidate: $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))"
-  else
-    warn "No Python candidate found."
-  fi
-  hr
-  log "Repository preview:"
-  find . -maxdepth 3 -type f | sort | sed -n '1,160p'
-}
+bootstrap() { ensure_repo_root; print_system_info; print_tool_locations; install_deps; log "Bootstrap complete."; }
+doctor() { ensure_repo_root; print_system_info; print_tool_locations; find_any_python; [ -n "$PYTHON_BIN" ] && log "Python candidate: $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))" || true; }
 
 ensure_repo_root
-
 case "$MODE" in
-  help|-h|--help)
-    usage
-    ;;
-  doctor)
-    doctor
-    ;;
-  bootstrap)
-    bootstrap
-    ;;
-  install)
-    install_deps
-    ;;
-  aggregate)
-    run_aggregate
-    ;;
-  negative-control)
-    run_negative_control
-    ;;
-  quick)
-    print_system_info
-    print_tool_locations
-    compile_scripts
-    run_negative_control
-    run_aggregate
-    hr
-    log "Quick check complete."
-    ;;
-  local-sst2)
-    run_validation_task sst2 20260615
-    ;;
-  local-squad)
-    run_validation_task squad 20260616
-    ;;
-  local-control-sst2)
-    run_utility_control_task sst2 20260618
-    ;;
-  local-control-squad)
-    run_utility_control_task squad 20260619
-    ;;
-  local-all)
-    run_validation_task sst2 20260615
-    run_validation_task squad 20260616
-    run_utility_control_task sst2 20260618
-    run_utility_control_task squad 20260619
-    run_negative_control
-    run_aggregate
-    hr
-    log "Full local run complete."
-    ;;
-  *)
-    echo "Unknown mode: $MODE" >&2
-    echo >&2
-    usage >&2
-    exit 2
-    ;;
+  help|-h|--help) usage ;;
+  doctor) doctor ;;
+  bootstrap|install) bootstrap ;;
+  aggregate) run_aggregate ;;
+  negative-control) run_negative_control ;;
+  quick) print_system_info; print_tool_locations; compile_scripts; run_negative_control; run_aggregate; log "Quick check complete." ;;
+  local-sst2) run_validation_task sst2 20260615 ;;
+  local-squad) run_validation_task squad 20260616 ;;
+  local-control-sst2) run_utility_control_task sst2 20260618 ;;
+  local-control-squad) run_utility_control_task squad 20260619 ;;
+  local-all) run_validation_task sst2 20260615; run_validation_task squad 20260616; run_utility_control_task sst2 20260618; run_utility_control_task squad 20260619; run_negative_control; run_aggregate; log "Full local run complete." ;;
+  *) echo "Unknown mode: $MODE" >&2; usage >&2; exit 2 ;;
 esac
