@@ -50,15 +50,15 @@ Fast validation SmolLM MLX adaptation of PACZero-ZPL mechanism, with smoke-scale
 
 | Task | Success | Runtime s | M | Membership | Targets | Steps | FD finite | FD signal | I=0 audit | Utility >= baseline | Violations |
 |---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|
-| sst2 | True | 42.12 | 126 | [63] | 60 | 30 | 1.0 | 1.0 | True | True | 0 |
-| squad | True | 60.021 | 126 | [63] | 60 | 30 | 1.0 | 1.0 | True | True | 0 |
+| sst2 | True | 42.834 | 126 | [63] | 60 | 30 | 1.0 | 1.0 | True | True | 0 |
+| squad | True | 64.665 | 126 | [63] | 60 | 30 | 1.0 | 1.0 | True | True | 0 |
 
 ## Non-private ZO utility controls
 
 | Task | Success | Runtime s | Targets | Steps | FD finite | FD signal | Utility >= baseline | Adapter saved |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| sst2 | True | 43.451 | 60 | 30 | 1.0 | 1.0 | True | True |
-| squad | True | 63.406 | 60 | 30 | 1.0 | 1.0 | True | True |
+| sst2 | True | 43.263 | 60 | 30 | 1.0 | 1.0 | True | True |
+| squad | True | 64.331 | 60 | 30 | 1.0 | 1.0 | True | True |
 
 ## Negative-control audit
 
