@@ -3,7 +3,8 @@ set -euo pipefail
 
 # PAC-Zero MLX validation helper.
 # Fast path: quick/aggregate/negative-control use the built-in macOS python3 when possible.
-# Full MLX runs: install/local-* still bootstrap Python 3.11+ and MLX dependencies.
+# MLX path: install/local-* first try the available Apple Silicon python3 with --user packages,
+# then fall back to Homebrew/Python 3.11 only if that fails.
 
 MODE="${1:-quick}"
 MODEL="${MODEL:-mlx-community/SmolLM-135M-4bit}"
@@ -25,6 +26,7 @@ VENV_DIR="${VENV_DIR:-.venv}"
 AUTO_INSTALL_HOMEBREW="${AUTO_INSTALL_HOMEBREW:-ask}"
 AUTO_BREW_INSTALL_PYTHON="${AUTO_BREW_INSTALL_PYTHON:-1}"
 PACZERO_SKIP_VENV="${PACZERO_SKIP_VENV:-0}"
+PACZERO_USE_SYSTEM_PYTHON="${PACZERO_USE_SYSTEM_PYTHON:-1}"
 
 PYTHON_BIN=""
 BREW_BIN=""
@@ -39,10 +41,10 @@ usage() {
   cat <<'USAGE'
 PAC-Zero MLX validation helper
 
-Fast check, no Homebrew/Python install needed on standard macOS:
+Fast archive check, no Homebrew needed on standard macOS:
   bash run.sh quick
 
-Full local MLX run on Apple Silicon:
+Full local MLX run, now also tries macOS python3 first:
   bash run.sh install
   bash run.sh local-all
 
@@ -51,18 +53,23 @@ Modes:
   aggregate             Use available python3, rebuild aggregate report from included JSON files.
   negative-control      Use available python3, run only the ZPL negative-control check.
   doctor                Print diagnostics only.
-  bootstrap             Set up Python 3.11+, .venv, and dependencies for full MLX runs.
-  install               Same as bootstrap dependency install.
+  bootstrap             Install/check MLX dependencies.
+  install               Install/check MLX dependencies.
   local-sst2            Run local MLX validation on SST-2.
   local-squad           Run local MLX validation on SQuAD.
   local-control-sst2    Run local non-private utility control on SST-2.
   local-control-squad   Run local non-private utility control on SQuAD.
   local-all             Run all local MLX tasks and rebuild aggregate report.
 
+Environment knobs:
+  PACZERO_USE_SYSTEM_PYTHON=1   default; try /usr/bin/python3 + --user packages for MLX first.
+  PACZERO_USE_SYSTEM_PYTHON=0   force venv/Python 3.11+ path.
+  AUTO_INSTALL_HOMEBREW=1       allow Homebrew install without prompt if fallback is needed.
+
 Notes:
-  - quick/aggregate/negative-control intentionally accept Python 3.9+ to be fast on clean macOS.
-  - install/local-* use Python 3.11+ and can install it via Homebrew.
-  - To allow Homebrew install without prompt: AUTO_INSTALL_HOMEBREW=1 bash run.sh install
+  - quick/aggregate/negative-control intentionally accept Python 3.9+.
+  - On recent Apple Silicon macOS, mlx/mlx-lm may install successfully under the system Python 3.9 user site.
+  - If the system Python path fails, install/local-* fall back to Python 3.11+ via Homebrew.
 USAGE
 }
 
@@ -127,9 +134,14 @@ find_any_python() {
   else PYTHON_BIN=""; fi
 }
 
+find_system_python() {
+  if command -v python3 >/dev/null 2>&1; then PYTHON_BIN="$(command -v python3)";
+  elif command -v python >/dev/null 2>&1; then PYTHON_BIN="$(command -v python)";
+  else PYTHON_BIN=""; fi
+}
+
 python_at_least() {
-  min_major="$1"
-  min_minor="$2"
+  min_major="$1"; min_minor="$2"
   [ -n "$PYTHON_BIN" ] || return 1
   "$PYTHON_BIN" - "$min_major" "$min_minor" <<'PY'
 import sys
@@ -161,7 +173,7 @@ ask_yes_no() {
 ensure_homebrew() {
   find_brew
   if [ -n "$BREW_BIN" ]; then log "Homebrew available: $BREW_BIN"; return 0; fi
-  warn "Homebrew is missing. It is only needed for full MLX install/local-* modes."
+  warn "Homebrew is missing. It is only needed if the no-Homebrew Python path fails."
   if [ "$AUTO_INSTALL_HOMEBREW" = "0" ]; then fail "Homebrew install disabled."; fi
   if [ "$AUTO_INSTALL_HOMEBREW" = "1" ] || ask_yes_no "Install Homebrew now? [y/N]" "no"; then
     run_cmd /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -174,7 +186,7 @@ ensure_homebrew() {
 
 ensure_python311() {
   hr
-  log "Checking Python 3.11+ for full MLX runs."
+  log "Checking Python 3.11+ fallback path."
   find_any_python
   if [ -n "$PYTHON_BIN" ]; then log "Candidate: $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))"; fi
   if python_at_least 3 11; then log "Python 3.11+ is available."; return 0; fi
@@ -203,29 +215,53 @@ ensure_pip() {
   log "pip: $($PYTHON_BIN -m pip --version)"
 }
 
-install_deps() {
+check_mlx_imports() {
+  "$PYTHON_BIN" - <<'PY'
+import importlib.util
+missing = [name for name in ['mlx', 'mlx_lm', 'huggingface_hub', 'safetensors', 'numpy', 'datasets'] if importlib.util.find_spec(name) is None]
+if missing:
+    print('missing:', ', '.join(missing))
+    raise SystemExit(1)
+print('MLX/runtime imports: ok')
+PY
+}
+
+install_mlx_user_site() {
+  find_system_python
+  [ -n "$PYTHON_BIN" ] || return 1
+  log "Trying no-Homebrew MLX install using system Python: $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))"
+  python_at_least 3 9 || return 1
+  ensure_pip
+  run_cmd "$PYTHON_BIN" -m pip install --user --upgrade mlx mlx-lm huggingface_hub hf_transfer safetensors numpy datasets
+  check_mlx_imports
+}
+
+install_mlx_venv() {
   ensure_python311
   ensure_venv
   ensure_pip
-  hr
-  log "Installing MLX/runtime dependencies."
+  log "Installing MLX/runtime dependencies into managed Python environment."
   run_cmd "$PYTHON_BIN" -m pip install --upgrade pip
   run_cmd "$PYTHON_BIN" -m pip install --upgrade mlx mlx-lm huggingface_hub hf_transfer safetensors numpy datasets
+  check_mlx_imports
 }
 
-compile_scripts() {
-  ensure_light_python
-  run_cmd "$PYTHON_BIN" -m py_compile scripts/*.py
+install_deps() {
+  hr
+  log "Installing/checking MLX dependencies."
+  if [ "$PACZERO_USE_SYSTEM_PYTHON" = "1" ]; then
+    if install_mlx_user_site; then
+      log "No-Homebrew system Python MLX setup succeeded."
+      return 0
+    fi
+    warn "System Python MLX setup failed; falling back to managed Python 3.11+ path."
+  fi
+  install_mlx_venv
 }
-run_negative_control() {
-  ensure_light_python
-  run_cmd "$PYTHON_BIN" scripts/paczero_zpl_negative_control.py
-}
-run_aggregate() {
-  ensure_light_python
-  run_cmd "$PYTHON_BIN" scripts/paczero_smollm_validation_aggregate.py
-  ls -lh benchmark-results/paczero-smollm-validation-aggregate || true
-}
+
+compile_scripts() { ensure_light_python; run_cmd "$PYTHON_BIN" -m py_compile scripts/*.py; }
+run_negative_control() { ensure_light_python; run_cmd "$PYTHON_BIN" scripts/paczero_zpl_negative_control.py; }
+run_aggregate() { ensure_light_python; run_cmd "$PYTHON_BIN" scripts/paczero_smollm_validation_aggregate.py; ls -lh benchmark-results/paczero-smollm-validation-aggregate || true; }
 
 print_run_config() {
   hr
