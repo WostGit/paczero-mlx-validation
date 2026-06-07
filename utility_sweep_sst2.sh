@@ -117,6 +117,7 @@ for row in "${configs[@]}"; do
   end_epoch=$(date +%s)
   wall_seconds=$((end_epoch - start_epoch))
 
+  set +e
   "$PYTHON_BIN" - "$json_out" "$label" "$wall_seconds" "$summary_jsonl" "$summary_txt" <<'PY'
 import json
 import sys
@@ -206,12 +207,18 @@ with summary_txt.open('a') as fh:
 raise SystemExit(0 if convincing else 2)
 PY
   status=$?
+  set -e
+
   if [ "$status" = "0" ]; then
     found="1"
     log "Found first convincing short utility-smoke run: $label" | tee -a "$summary_txt"
     if [ "$STOP_ON_CONVINCING" = "1" ]; then
       break
     fi
+  elif [ "$status" = "2" ]; then
+    log "$label did not meet the convincing-smoke threshold; continuing." | tee -a "$summary_txt"
+  else
+    fail "Result parser failed for $label with status $status."
   fi
 
 done
