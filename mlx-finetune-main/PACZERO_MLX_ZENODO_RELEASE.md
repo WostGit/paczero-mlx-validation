@@ -1,0 +1,113 @@
+# PACZero-ZPL MLX Port Demo: Zenodo Release Package
+
+## Claim boundary
+
+This artifact is a fast, validation-focused **MLX port demo of the PACZero-ZPL privacy mechanism**. It is not a full paper-scale reproduction of PACZero utility numbers.
+
+The release demonstrates that the PACZero-ZPL concepts can be ported to MLX by running the mechanism on `mlx-community/SmolLM-135M-4bit` across both SST-2 and SQuAD task paths with strict transcript auditing.
+
+Final release workflow trigger marker: `2026-06-08-final-github-actions-run`.
+
+## Paper-concept to MLX-evidence map
+
+| PACZero paper concept | MLX port evidence in this release |
+|---|---|
+| PACZero-ZPL release rule | `scripts/paczero_mlxlm_faithful_adaptation.py` audits unanimous releases as subset-independent and disagreement releases as RNG-derived signs. |
+| `I(S*;Y_1:T)=0` mechanism | Aggregate result requires zero release-rule violations and transcript independence by construction across SST-2 and SQuAD. |
+| `M=126` ZPL setting | Aggregate result requires `all_use_M_126 = true`. |
+| Prior membership probability 1/2 | Candidate membership builder guarantees each example appears in `M/2 = 63` subsets; aggregate requires `membership_counts = [63]`. |
+| Per-sample two-point zeroth-order finite differences | The runner evaluates per-example losses at `theta + mu*z` and `theta - mu*z`, then computes `(plus - minus) / (2*mu)`. |
+| Sign-quantized subset aggregation | Per-sample FD values are clipped, averaged by candidate subset, and sign-quantized before ZPL release. |
+| LoRA parameterization | Rank-8 / alpha-16 custom LoRA A/B tensors are attached in MLX. |
+| q/v projection target fidelity | The SmolLM validation run targets `q_proj + v_proj` across all 30 SmolLM layers, for 60 LoRA targets. |
+| Both paper task families | The release runs SST-2 and SQuAD data paths. |
+| Saved adapters | Each task saves an `.npz` adapter artifact. |
+| Audit sanity check | `scripts/paczero_zpl_negative_control.py` deliberately violates ZPL by making disagreement releases depend on `S*` and checks that the audit catches it. |
+
+## Primary release files
+
+After the workflow completes, include these in the Zenodo release:
+
+```text
+PACZERO_MLX_ZENODO_RELEASE.md
+.zenodo.json
+scripts/paczero_core.py
+scripts/paczero_mlxlm_exhaustive_readiness.py
+scripts/paczero_mlxlm_lora_reproduction.py
+scripts/paczero_mlxlm_faithful_adaptation.py
+scripts/paczero_smollm_nonprivate_utility_control.py
+scripts/paczero_smollm_validation_aggregate.py
+scripts/paczero_zpl_negative_control.py
+.github/workflows/paczero-smollm-validation.yml
+benchmark-results/paczero-smollm-validation-aggregate/smollm_validation_aggregate_results.json
+benchmark-results/paczero-smollm-validation-aggregate/smollm_validation_report.md
+benchmark-results/paczero-smollm-validation-aggregate/zpl_negative_control_results.json
+benchmark-results/paczero-smollm-validation/smollm-135m-4bit-sst2/smollm_validation_results.json
+benchmark-results/paczero-smollm-validation/smollm-135m-4bit-squad/smollm_validation_results.json
+benchmark-results/paczero-smollm-utility-control/smollm-135m-4bit-sst2/nonprivate_utility_control_results.json
+benchmark-results/paczero-smollm-utility-control/smollm-135m-4bit-squad/nonprivate_utility_control_results.json
+benchmark-logs/paczero-smollm-validation/smollm-135m-4bit-sst2/smollm-validation-latest.txt
+benchmark-logs/paczero-smollm-validation/smollm-135m-4bit-squad/smollm-validation-latest.txt
+```
+
+Adapter `.npz` files are optional and were intentionally omitted from this cleaned zip to keep only the strictly required latest release evidence.
+
+## Reproduction command
+
+The easiest reproduction path is the GitHub Actions workflow:
+
+```text
+PACZero SmolLM validation workflow
+```
+
+Default workflow parameters:
+
+```text
+model = mlx-community/SmolLM-135M-4bit
+tasks = SST-2 and SQuAD
+steps = 30
+train/dev/eval = 8/8/32
+M = 126
+LoRA = rank 8 / alpha 16
+targets = q_proj + v_proj
+layers = all
+privacy audit = strict ZPL transcript audit
+```
+
+## Negative-control audit
+
+The negative control intentionally replaces the safe ZPL disagreement branch:
+
+```text
+disagreement -> independent random sign
+```
+
+with the forbidden branch:
+
+```text
+disagreement -> sign from secret subset S*
+```
+
+The release is stronger if the negative control result reports:
+
+```text
+good_zpl_release_passes_audit = true
+bad_secret_dependent_release_fails_audit = true
+negative_control_effective = true
+```
+
+## Explicit limitations
+
+This release does not claim:
+
+- paper-scale OPT-1.3B / OPT-6.7B reproduction;
+- paper-scale `1000/500/1000` data or 1000 ZPL steps;
+- generated SQuAD EM/F1;
+- utility parity with the PACZero paper;
+- differential privacy.
+
+The MLX port uses a normalized zeroth-order direction and fixed `mu/lr` for a fast, stable MLX demo. That preserves the PACZero-ZPL release mechanism and transcript-audit claim, but it is not a byte-for-byte numerical reproduction of the reference trainer.
+
+## Recommended release wording
+
+> This artifact demonstrates a mechanism-faithful MLX port of PACZero-ZPL. It validates the key privacy-mechanism ingredients: `M=126`, `M/2` candidate membership, per-sample two-point finite differences, sign-quantized subset aggregation, rank-8/alpha-16 q/v LoRA across all SmolLM layers, strict ZPL transcript auditing, and a negative control showing that an `S*`-dependent disagreement release is caught. It is intended as a compact MLX port demo, not a full paper-scale utility reproduction.
