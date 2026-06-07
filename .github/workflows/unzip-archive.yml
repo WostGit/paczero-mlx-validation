@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   unzip:
-    name: Locate, unpack, and commit archive
+    name: Replace repository with archive contents
     runs-on: ubuntu-latest
     if: github.actor != 'github-actions[bot]'
     steps:
@@ -38,25 +38,41 @@ jobs:
           fi
           unzip -t archive.zip
 
-      - name: Unpack archive into repository root
+      - name: Replace repository root with archive contents
         run: |
           set -euo pipefail
-          rm -rf unpacked
-          mkdir -p unpacked
-          unzip -q archive.zip -d unpacked
-          find unpacked -maxdepth 3 -type f | sort | sed -n '1,120p'
-          rsync -a unpacked/ ./
-          rm -rf unpacked archive.zip
+          extract_dir="$RUNNER_TEMP/archive_extract"
+          source_dir="$RUNNER_TEMP/archive_source"
+          rm -rf "$extract_dir" "$source_dir"
+          mkdir -p "$extract_dir" "$source_dir"
+          unzip -q archive.zip -d "$extract_dir"
 
-      - name: Commit unpacked contents
+          top_level_count=$(find "$extract_dir" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
+          top_level_dir=$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)
+
+          if [ "$top_level_count" = "1" ] && [ -n "$top_level_dir" ]; then
+            echo "Archive has one top-level folder; using its contents as repository root."
+            rsync -a "$top_level_dir"/ "$source_dir"/
+          else
+            echo "Archive has root-level contents; using them directly."
+            rsync -a "$extract_dir"/ "$source_dir"/
+          fi
+
+          echo "Replacement root preview:"
+          find "$source_dir" -maxdepth 3 -type f | sort | sed -n '1,120p'
+
+          rsync -a --delete --exclude='.git/' "$source_dir"/ ./
+          rm -f archive.zip
+
+      - name: Commit replacement contents
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
-            echo "No unpacked changes to commit."
+            echo "No replacement changes to commit."
             exit 0
           fi
-          git commit -m "Unpack packaged archive"
+          git commit -m "Replace repository with unpacked archive"
           git push
