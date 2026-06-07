@@ -4,6 +4,51 @@ This repository contains a compact PAC-Zero / ZPL validation package for Apple M
 
 It is intended as a reproducible software artifact. It preserves the validation scripts, selected result JSON files, logs, and aggregate report for a smoke-scale MLX adaptation. It does **not** claim to reproduce the full paper-scale OPT utility results.
 
+## Quick start
+
+For the fastest inspection path:
+
+```bash
+git clone https://github.com/WostGit/paczero-mlx-validation.git
+cd paczero-mlx-validation
+bash run.sh quick
+```
+
+This compiles the Python scripts, runs the ZPL negative-control check, and rebuilds the aggregate report from the included result JSON files.
+
+For a full local MLX run on Apple Silicon:
+
+```bash
+git clone https://github.com/WostGit/paczero-mlx-validation.git
+cd paczero-mlx-validation
+python3.11 -m venv .venv
+source .venv/bin/activate
+bash run.sh install
+bash run.sh local-all
+```
+
+Full local validation downloads model and dataset dependencies and is intended for macOS on Apple Silicon.
+
+Useful `run.sh` modes:
+
+```text
+bash run.sh quick
+bash run.sh aggregate
+bash run.sh negative-control
+bash run.sh install
+bash run.sh local-sst2
+bash run.sh local-squad
+bash run.sh local-control-sst2
+bash run.sh local-control-squad
+bash run.sh local-all
+```
+
+You can reduce runtime for local experiments by overriding defaults:
+
+```bash
+STEPS=10 TRAIN_EXAMPLES=4 DEV_EXAMPLES=4 EVAL_EXAMPLES=16 bash run.sh local-sst2
+```
+
 ## What is included
 
 - PAC-Zero / ZPL transcript-audit logic with `M = 126` subsets.
@@ -130,14 +175,13 @@ Create a virtual environment:
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install --upgrade mlx mlx-lm huggingface_hub hf_transfer safetensors numpy datasets
+bash run.sh install
 ```
 
-Sanity-check the scripts:
+Sanity-check the scripts and rebuild preserved outputs:
 
 ```bash
-python -m py_compile scripts/*.py
+bash run.sh quick
 ```
 
 ### Rebuild the aggregate report from included results
@@ -145,7 +189,7 @@ python -m py_compile scripts/*.py
 This is the fastest local reproducibility check because it uses the preserved JSON files already included in the repository:
 
 ```bash
-python scripts/paczero_smollm_validation_aggregate.py
+bash run.sh aggregate
 ```
 
 Expected outputs:
@@ -158,7 +202,7 @@ benchmark-results/paczero-smollm-validation-aggregate/smollm_validation_report.m
 ### Run the ZPL negative control locally
 
 ```bash
-python scripts/paczero_zpl_negative_control.py
+bash run.sh negative-control
 ```
 
 This writes or updates:
@@ -167,14 +211,51 @@ This writes or updates:
 benchmark-results/paczero-smollm-validation-aggregate/zpl_negative_control_results.json
 ```
 
-### Run a local SmolLM validation task
+### Run local SmolLM validation tasks
 
-SST-2 example:
+SST-2:
 
 ```bash
-mkdir -p benchmark-results/paczero-smollm-validation/smollm-135m-4bit-sst2 \
-         benchmark-results/paczero-smollm-validation-adapters/smollm-135m-4bit-sst2
+bash run.sh local-sst2
+```
 
+SQuAD:
+
+```bash
+bash run.sh local-squad
+```
+
+### Run local non-private utility controls
+
+SST-2:
+
+```bash
+bash run.sh local-control-sst2
+```
+
+SQuAD:
+
+```bash
+bash run.sh local-control-squad
+```
+
+### Run all local validation commands
+
+```bash
+bash run.sh local-all
+```
+
+After running task-level validation and utility-control jobs, regenerate the aggregate report if needed:
+
+```bash
+bash run.sh aggregate
+```
+
+## Manual local command reference
+
+The `run.sh` wrapper expands to direct Python calls such as:
+
+```bash
 python scripts/paczero_mlxlm_faithful_adaptation.py \
   --model mlx-community/SmolLM-135M-4bit \
   --slug smollm-135m-4bit \
@@ -197,76 +278,7 @@ python scripts/paczero_mlxlm_faithful_adaptation.py \
   --adapter-out benchmark-results/paczero-smollm-validation-adapters/smollm-135m-4bit-sst2/all_layers_qv_lora_rank8_alpha16.npz
 ```
 
-SQuAD example:
-
-```bash
-mkdir -p benchmark-results/paczero-smollm-validation/smollm-135m-4bit-squad \
-         benchmark-results/paczero-smollm-validation-adapters/smollm-135m-4bit-squad
-
-python scripts/paczero_mlxlm_faithful_adaptation.py \
-  --model mlx-community/SmolLM-135M-4bit \
-  --slug smollm-135m-4bit \
-  --task squad \
-  --projections q_proj,v_proj \
-  --layers all \
-  --rank 8 \
-  --alpha 16.0 \
-  --seed 20260616 \
-  --steps 30 \
-  --train-examples 8 \
-  --dev-examples 8 \
-  --eval-examples 32 \
-  --num-subsets 126 \
-  --mu 0.05 \
-  --lr 0.05 \
-  --clip 25.0 \
-  --eval-every 5 \
-  --json-out benchmark-results/paczero-smollm-validation/smollm-135m-4bit-squad/smollm_validation_results.json \
-  --adapter-out benchmark-results/paczero-smollm-validation-adapters/smollm-135m-4bit-squad/all_layers_qv_lora_rank8_alpha16.npz
-```
-
-### Run a local non-private utility control
-
-SST-2 example:
-
-```bash
-mkdir -p benchmark-results/paczero-smollm-utility-control/smollm-135m-4bit-sst2 \
-         benchmark-results/paczero-smollm-utility-control-adapters/smollm-135m-4bit-sst2
-
-python scripts/paczero_smollm_nonprivate_utility_control.py \
-  --model mlx-community/SmolLM-135M-4bit \
-  --slug smollm-135m-4bit \
-  --task sst2 \
-  --projections q_proj,v_proj \
-  --layers all \
-  --rank 8 \
-  --alpha 16.0 \
-  --seed 20260618 \
-  --steps 30 \
-  --train-examples 8 \
-  --dev-examples 8 \
-  --eval-examples 32 \
-  --mu 0.05 \
-  --lr 0.05 \
-  --eval-every 5 \
-  --json-out benchmark-results/paczero-smollm-utility-control/smollm-135m-4bit-sst2/nonprivate_utility_control_results.json \
-  --adapter-out benchmark-results/paczero-smollm-utility-control-adapters/smollm-135m-4bit-sst2/nonprivate_all_layers_qv_lora_rank8_alpha16.npz
-```
-
-SQuAD is the same command with:
-
-```text
---task squad
---seed 20260619
---json-out benchmark-results/paczero-smollm-utility-control/smollm-135m-4bit-squad/nonprivate_utility_control_results.json
---adapter-out benchmark-results/paczero-smollm-utility-control-adapters/smollm-135m-4bit-squad/nonprivate_all_layers_qv_lora_rank8_alpha16.npz
-```
-
-After running task-level validation and utility-control jobs, regenerate the aggregate report:
-
-```bash
-python scripts/paczero_smollm_validation_aggregate.py
-```
+See `bash run.sh --help` for the supported local modes and environment-variable overrides.
 
 ## Expected runtime and storage notes
 
