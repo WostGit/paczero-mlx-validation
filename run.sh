@@ -49,8 +49,8 @@ Full local MLX run, now also tries macOS python3 first:
   bash run.sh local-all
 
 Modes:
-  quick                 Use available python3, compile scripts, run negative control, rebuild aggregate report.
-  aggregate             Use available python3, rebuild aggregate report from included JSON files.
+  quick                 Use available python3, compile scripts, run negative control, rebuild aggregate report, print final summary.
+  aggregate             Use available python3, rebuild aggregate report from included JSON files, print final summary.
   negative-control      Use available python3, run only the ZPL negative-control check.
   doctor                Print diagnostics only.
   bootstrap             Install/check MLX dependencies.
@@ -59,7 +59,7 @@ Modes:
   local-squad           Run local MLX validation on SQuAD.
   local-control-sst2    Run local non-private utility control on SST-2.
   local-control-squad   Run local non-private utility control on SQuAD.
-  local-all             Run all local MLX tasks and rebuild aggregate report.
+  local-all             Run all local MLX tasks, rebuild aggregate report, print final summary.
 
 Environment knobs:
   PACZERO_USE_SYSTEM_PYTHON=1   default; try /usr/bin/python3 + --user packages for MLX first.
@@ -259,9 +259,131 @@ install_deps() {
   install_mlx_venv
 }
 
+print_final_summary() {
+  ensure_light_python
+  "$PYTHON_BIN" - <<'PY'
+import json
+from pathlib import Path
+
+path = Path('benchmark-results/paczero-smollm-validation-aggregate/smollm_validation_aggregate_results.json')
+report = Path('benchmark-results/paczero-smollm-validation-aggregate/smollm_validation_report.md')
+neg_path = Path('benchmark-results/paczero-smollm-validation-aggregate/zpl_negative_control_results.json')
+
+print('\n' + '=' * 72)
+print('PAC-ZERO MLX FINAL RESULT SUMMARY')
+print('=' * 72)
+
+if not path.exists():
+    print(f'Aggregate JSON missing: {path}')
+    print('=' * 72)
+    raise SystemExit(0)
+
+data = json.loads(path.read_text())
+
+def yn(value):
+    return 'PASS' if bool(value) else 'FAIL'
+
+def fmt(value):
+    if value is None:
+        return 'n/a'
+    if isinstance(value, float):
+        return f'{value:.6g}'
+    return str(value)
+
+print(f'Overall success: {yn(data.get("success"))}')
+print(f'Claim scope: {data.get("claim", "n/a")}')
+print()
+
+limitations = data.get('non_claims_limitations') or []
+if limitations:
+    print('Important limitations / non-claims:')
+    for item in limitations:
+        print(f'  - {item}')
+    print()
+
+checks = data.get('aggregate_checks') or {}
+if checks:
+    print('Aggregate checks:')
+    for key in sorted(checks):
+        print(f'  - {key}: {yn(checks[key])}')
+    print()
+
+neg = data.get('negative_control') or {}
+if neg:
+    print('Negative control:')
+    print(f'  - success: {yn(neg.get("success"))}')
+    print(f'  - M: {fmt(neg.get("num_subsets_M"))}')
+    print(f'  - membership counts: {fmt(neg.get("membership_column_counts_unique"))}')
+    print(f'  - good ZPL release passes audit: {yn((neg.get("checks") or {}).get("good_zpl_release_passes_audit"))}')
+    print(f'  - bad secret-dependent release fails audit: {yn((neg.get("checks") or {}).get("bad_secret_dependent_release_fails_audit"))}')
+    print(f'  - conclusion: {neg.get("conclusion", "n/a")}')
+    print()
+
+print('PAC-Zero/ZPL validation tasks:')
+for task in data.get('tasks') or []:
+    name = task.get('task', 'unknown')
+    print(f'  - {name}: {yn(task.get("success"))}')
+    print(f'      elapsed_seconds: {fmt(task.get("elapsed_seconds"))}')
+    print(f'      model: {task.get("model", "n/a")}')
+    print(f'      examples train/dev/eval: {fmt(task.get("train_examples"))}/{fmt(task.get("dev_examples"))}/{fmt(task.get("eval_examples"))}')
+    print(f'      steps: {fmt(task.get("steps"))}')
+    print(f'      M: {fmt(task.get("num_subsets_M"))}')
+    print(f'      membership counts: {fmt(task.get("membership_counts"))}')
+    print(f'      LoRA rank/alpha: {fmt(task.get("rank"))}/{fmt(task.get("alpha"))}')
+    print(f'      q/v target count: {fmt(task.get("target_count"))}')
+    print(f'      projections: {fmt(task.get("projections"))}')
+    print(f'      FD finite/signal rates: {fmt(task.get("fd_finite_rate"))}/{fmt(task.get("fd_signal_rate"))}')
+    print(f'      privacy audit: {yn(task.get("privacy_transcript_audit_passed"))}')
+    print(f'      release-rule violations: {fmt(task.get("release_rule_violation_count"))}')
+    print(f'      transcript independent by construction: {yn(task.get("transcript_independent_by_construction"))}')
+    print(f'      ZPL utility not worse than baseline: {yn(task.get("utility_not_worse_than_baseline"))}')
+    print(f'      adapter saved: {yn(task.get("adapter_saved"))}')
+    baseline = task.get('baseline') or {}
+    best = task.get('selected_best_adapter_eval') or task.get('best_checkpoint') or {}
+    if baseline or best:
+        print('      baseline vs selected checkpoint:')
+        for metric in ['train_loss', 'train_accuracy', 'dev_loss', 'dev_accuracy', 'eval_loss', 'eval_accuracy']:
+            if metric in baseline or metric in best:
+                print(f'        {metric}: {fmt(baseline.get(metric))} -> {fmt(best.get(metric))}')
+        if 'eval_answer_likelihood_metric' in baseline or 'eval_answer_likelihood_metric' in best:
+            print(f'        metric note: {baseline.get("eval_answer_likelihood_metric") or best.get("eval_answer_likelihood_metric")}')
+    print()
+
+print('Non-private utility controls:')
+for ctrl in data.get('nonprivate_utility_controls') or []:
+    name = ctrl.get('task', 'unknown')
+    print(f'  - {name}: {yn(ctrl.get("success"))}')
+    print(f'      elapsed_seconds: {fmt(ctrl.get("elapsed_seconds"))}')
+    print(f'      steps: {fmt(ctrl.get("steps"))}')
+    print(f'      LoRA rank/alpha: {fmt(ctrl.get("rank"))}/{fmt(ctrl.get("alpha"))}')
+    print(f'      q/v target count: {fmt(ctrl.get("target_count"))}')
+    print(f'      FD finite/signal rates: {fmt(ctrl.get("fd_finite_rate"))}/{fmt(ctrl.get("fd_signal_rate"))}')
+    print(f'      utility not worse than baseline: {yn(ctrl.get("utility_not_worse_than_baseline"))}')
+    print(f'      adapter saved: {yn(ctrl.get("adapter_saved"))}')
+    baseline = ctrl.get('baseline') or {}
+    best = ctrl.get('selected_best_adapter_eval') or ctrl.get('best_checkpoint') or {}
+    if baseline or best:
+        print('      baseline vs selected checkpoint:')
+        for metric in ['train_loss', 'train_accuracy', 'dev_loss', 'dev_accuracy', 'eval_loss', 'eval_accuracy']:
+            if metric in baseline or metric in best:
+                print(f'        {metric}: {fmt(baseline.get(metric))} -> {fmt(best.get(metric))}')
+        if 'eval_answer_likelihood_metric' in baseline or 'eval_answer_likelihood_metric' in best:
+            print(f'        metric note: {baseline.get("eval_answer_likelihood_metric") or best.get("eval_answer_likelihood_metric")}')
+    print()
+
+print('Output files:')
+for p in [path, report, neg_path]:
+    if p.exists():
+        print(f'  - {p} ({p.stat().st_size} bytes)')
+    else:
+        print(f'  - {p} (missing)')
+print('=' * 72)
+PY
+}
+
 compile_scripts() { ensure_light_python; run_cmd "$PYTHON_BIN" -m py_compile scripts/*.py; }
 run_negative_control() { ensure_light_python; run_cmd "$PYTHON_BIN" scripts/paczero_zpl_negative_control.py; }
-run_aggregate() { ensure_light_python; run_cmd "$PYTHON_BIN" scripts/paczero_smollm_validation_aggregate.py; ls -lh benchmark-results/paczero-smollm-validation-aggregate || true; }
+run_aggregate() { ensure_light_python; run_cmd "$PYTHON_BIN" scripts/paczero_smollm_validation_aggregate.py; ls -lh benchmark-results/paczero-smollm-validation-aggregate || true; print_final_summary; }
 
 print_run_config() {
   hr
