@@ -1,0 +1,11 @@
+PAC-Zero MLX aggressive SST-2 utility sweep
+
+Criterion for convincing utility-smoke evidence:
+  selected_eval_accuracy >= max(0.60, baseline_eval_accuracy + 0.05)
+
+This script is experimental. It is more aggressive than the archival validation
+path and is intended to discover whether any short configuration produces a
+visible SST-2 accuracy lift.
+
+----------------------------------------------------------------------
+[paczero-aggressive] Running np_layers4_lr02_mu05 kind=nonprivate steps=150 train/dev/eval=128/128/256 layers=4 lr=0.20 mu=0.05 seed=20260711
