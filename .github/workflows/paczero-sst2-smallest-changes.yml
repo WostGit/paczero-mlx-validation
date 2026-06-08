@@ -1,0 +1,102 @@
+name: PACZero SST-2 smallest-change utility exploration
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_nonprivate:
+        description: "Run non-private controls first"
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      run_zpl:
+        description: "Run audited ZPL/PACZero runs"
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      stop_on_convincing:
+        description: "Stop after first convincing run"
+        required: true
+        default: "false"
+        type: choice
+        options: ["true", "false"]
+      commit_results:
+        description: "Commit sweep summaries back to repository"
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+permissions:
+  contents: write
+
+env:
+  PYTHONUNBUFFERED: "1"
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
+
+jobs:
+  smallest-changes:
+    name: smallest-change utility sweep
+    runs-on: macos-14
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show machine diagnostics
+        run: |
+          set -euo pipefail
+          uname -a
+          sw_vers || true
+          sysctl -n machdep.cpu.brand_string || true
+          python3 --version
+          which python3
+
+      - name: Install runtime dependencies
+        run: |
+          set -euo pipefail
+          bash run.sh install
+
+      - name: Run smallest-change aggressive SST-2 sweep
+        env:
+          RUN_NONPRIVATE: ${{ inputs.run_nonprivate == 'true' && '1' || '0' }}
+          RUN_ZPL: ${{ inputs.run_zpl == 'true' && '1' || '0' }}
+          STOP_ON_CONVINCING: ${{ inputs.stop_on_convincing == 'true' && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          bash utility_aggressive_sst2.sh
+
+      - name: Print compact summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f benchmark-results/paczero-sst2-aggressive-utility/aggressive_summary.txt ]; then
+            cat benchmark-results/paczero-sst2-aggressive-utility/aggressive_summary.txt
+          else
+            echo "No aggressive summary file found."
+          fi
+
+      - name: Upload sweep results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paczero-sst2-smallest-change-results
+          path: |
+            benchmark-results/paczero-sst2-aggressive-utility/**
+          if-no-files-found: warn
+
+      - name: Commit sweep summaries
+        if: always() && inputs.commit_results == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add benchmark-results/paczero-sst2-aggressive-utility/aggressive_summary.txt benchmark-results/paczero-sst2-aggressive-utility/aggressive_results.jsonl || true
+          if git diff --cached --quiet; then
+            echo "No sweep summaries to commit."
+          else
+            git commit -m "Add SST-2 smallest-change utility sweep results [skip paczero-smollm-validation]"
+            git push
+          fi
